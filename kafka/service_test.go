@@ -545,7 +545,7 @@ type readyFunction struct {
 }
 
 func (f *readyFunction) Handle(_ context.Context, _ Message) error { return nil }
-func (f *readyFunction) Ready(_ context.Context) (bool, error)    { return f.ready, nil }
+func (f *readyFunction) Ready(_ context.Context) (bool, error)     { return f.ready, nil }
 
 // aliveFunction implements Handler and LivenessReporter for testing.
 type aliveFunction struct {
@@ -553,4 +553,4 @@ type aliveFunction struct {
 }
 
 func (f *aliveFunction) Handle(_ context.Context, _ Message) error { return nil }
-func (f *aliveFunction) Alive(_ context.Context) (bool, error)    { return f.alive, nil }
+func (f *aliveFunction) Alive(_ context.Context) (bool, error)     { return f.alive, nil }
