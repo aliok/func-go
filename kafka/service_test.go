@@ -565,13 +565,13 @@ type mockSession struct {
 	marked []*sarama.ConsumerMessage
 }
 
-func (s *mockSession) Claims() map[string][]int32          { return nil }
-func (s *mockSession) MemberID() string                    { return "test" }
-func (s *mockSession) GenerationID() int32                 { return 1 }
-func (s *mockSession) MarkOffset(string, int32, int64, string) {}
-func (s *mockSession) Commit()                             {}
+func (s *mockSession) Claims() map[string][]int32               { return nil }
+func (s *mockSession) MemberID() string                         { return "test" }
+func (s *mockSession) GenerationID() int32                      { return 1 }
+func (s *mockSession) MarkOffset(string, int32, int64, string)  {}
+func (s *mockSession) Commit()                                  {}
 func (s *mockSession) ResetOffset(string, int32, int64, string) {}
-func (s *mockSession) Context() context.Context            { return s.ctx }
+func (s *mockSession) Context() context.Context                 { return s.ctx }
 func (s *mockSession) MarkMessage(msg *sarama.ConsumerMessage, _ string) {
 	s.marked = append(s.marked, msg)
 }
@@ -581,10 +581,10 @@ type mockClaim struct {
 	ch chan *sarama.ConsumerMessage
 }
 
-func (c *mockClaim) Topic() string                         { return "test-topic" }
-func (c *mockClaim) Partition() int32                      { return 0 }
-func (c *mockClaim) InitialOffset() int64                  { return 0 }
-func (c *mockClaim) HighWaterMarkOffset() int64            { return 0 }
+func (c *mockClaim) Topic() string                            { return "test-topic" }
+func (c *mockClaim) Partition() int32                         { return 0 }
+func (c *mockClaim) InitialOffset() int64                     { return 0 }
+func (c *mockClaim) HighWaterMarkOffset() int64               { return 0 }
 func (c *mockClaim) Messages() <-chan *sarama.ConsumerMessage { return c.ch }
 
 // TestConsumeClaim_Success ensures that ConsumeClaim converts sarama messages
