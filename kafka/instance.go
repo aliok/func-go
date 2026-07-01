@@ -32,6 +32,9 @@ type LivenessReporter interface {
 	Alive(context.Context) (bool, error)
 }
 
+// HandleFunc is a function type that implements Handler.
+type HandleFunc func(context.Context, Message) error
+
 // DefaultHandler wraps a static function for use with the Kafka middleware.
 type DefaultHandler struct {
 	Handler func(context.Context, Message) error

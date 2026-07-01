@@ -224,6 +224,7 @@ func TestStop_Invoked(t *testing.T) {
 			return nil
 		}
 	)
+	defer cancel()
 
 	f := &testFunction{onStart: onStart, onStop: onStop}
 
