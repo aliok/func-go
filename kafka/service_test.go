@@ -7,8 +7,11 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/IBM/sarama"
 )
 
 // testFunction is a mock function used in tests. Defined inline to avoid
@@ -555,3 +558,156 @@ type aliveFunction struct {
 
 func (f *aliveFunction) Handle(_ context.Context, _ Message) error { return nil }
 func (f *aliveFunction) Alive(_ context.Context) (bool, error)     { return f.alive, nil }
+
+// mockSession implements sarama.ConsumerGroupSession for testing.
+type mockSession struct {
+	ctx    context.Context
+	marked []*sarama.ConsumerMessage
+}
+
+func (s *mockSession) Claims() map[string][]int32          { return nil }
+func (s *mockSession) MemberID() string                    { return "test" }
+func (s *mockSession) GenerationID() int32                 { return 1 }
+func (s *mockSession) MarkOffset(string, int32, int64, string) {}
+func (s *mockSession) Commit()                             {}
+func (s *mockSession) ResetOffset(string, int32, int64, string) {}
+func (s *mockSession) Context() context.Context            { return s.ctx }
+func (s *mockSession) MarkMessage(msg *sarama.ConsumerMessage, _ string) {
+	s.marked = append(s.marked, msg)
+}
+
+// mockClaim implements sarama.ConsumerGroupClaim for testing.
+type mockClaim struct {
+	ch chan *sarama.ConsumerMessage
+}
+
+func (c *mockClaim) Topic() string                         { return "test-topic" }
+func (c *mockClaim) Partition() int32                      { return 0 }
+func (c *mockClaim) InitialOffset() int64                  { return 0 }
+func (c *mockClaim) HighWaterMarkOffset() int64            { return 0 }
+func (c *mockClaim) Messages() <-chan *sarama.ConsumerMessage { return c.ch }
+
+// TestConsumeClaim_Success ensures that ConsumeClaim converts sarama messages
+// to kafka.Message, calls the handler, and marks the message on success.
+func TestConsumeClaim_Success(t *testing.T) {
+	var received Message
+	f := &testFunction{
+		onHandle: func(_ context.Context, msg Message) error {
+			received = msg
+			return nil
+		},
+	}
+
+	var ready atomic.Bool
+	h := &consumerGroupHandler{f: f, ready: &ready}
+
+	ch := make(chan *sarama.ConsumerMessage, 1)
+	ch <- &sarama.ConsumerMessage{
+		Key:       []byte("k1"),
+		Value:     []byte("v1"),
+		Topic:     "my-topic",
+		Partition: 2,
+		Offset:    99,
+		Headers: []*sarama.RecordHeader{
+			{Key: []byte("hk"), Value: []byte("hv")},
+		},
+	}
+	close(ch)
+
+	session := &mockSession{ctx: context.Background()}
+	claim := &mockClaim{ch: ch}
+
+	if err := h.ConsumeClaim(session, claim); err != nil {
+		t.Fatal(err)
+	}
+
+	if string(received.Key) != "k1" {
+		t.Fatalf("expected key 'k1', got '%s'", received.Key)
+	}
+	if string(received.Value) != "v1" {
+		t.Fatalf("expected value 'v1', got '%s'", received.Value)
+	}
+	if received.Topic != "my-topic" {
+		t.Fatalf("expected topic 'my-topic', got '%s'", received.Topic)
+	}
+	if received.Partition != 2 {
+		t.Fatalf("expected partition 2, got %d", received.Partition)
+	}
+	if received.Offset != 99 {
+		t.Fatalf("expected offset 99, got %d", received.Offset)
+	}
+	if len(received.Headers) != 1 || received.Headers[0].Key != "hk" || string(received.Headers[0].Value) != "hv" {
+		t.Fatalf("unexpected headers: %v", received.Headers)
+	}
+	if len(session.marked) != 1 {
+		t.Fatalf("expected 1 marked message, got %d", len(session.marked))
+	}
+}
+
+// TestConsumeClaim_Error ensures that when the handler returns an error,
+// the message is not marked and processing continues.
+func TestConsumeClaim_Error(t *testing.T) {
+	callCount := 0
+	f := &testFunction{
+		onHandle: func(_ context.Context, msg Message) error {
+			callCount++
+			if string(msg.Value) == "bad" {
+				return fmt.Errorf("handle error")
+			}
+			return nil
+		},
+	}
+
+	var ready atomic.Bool
+	h := &consumerGroupHandler{f: f, ready: &ready}
+
+	ch := make(chan *sarama.ConsumerMessage, 2)
+	ch <- &sarama.ConsumerMessage{Value: []byte("bad"), Topic: "t", Partition: 0, Offset: 1}
+	ch <- &sarama.ConsumerMessage{Value: []byte("good"), Topic: "t", Partition: 0, Offset: 2}
+	close(ch)
+
+	session := &mockSession{ctx: context.Background()}
+	claim := &mockClaim{ch: ch}
+
+	if err := h.ConsumeClaim(session, claim); err != nil {
+		t.Fatal(err)
+	}
+
+	if callCount != 2 {
+		t.Fatalf("expected handler called 2 times, got %d", callCount)
+	}
+	if len(session.marked) != 1 {
+		t.Fatalf("expected 1 marked message (only the good one), got %d", len(session.marked))
+	}
+	if session.marked[0].Offset != 2 {
+		t.Fatalf("expected marked offset 2, got %d", session.marked[0].Offset)
+	}
+}
+
+// TestConsumeClaim_SetupCleanup ensures Setup sets ready=true and
+// Cleanup sets ready=false.
+func TestConsumeClaim_SetupCleanup(t *testing.T) {
+	var ready atomic.Bool
+	h := &consumerGroupHandler{
+		f:     &testFunction{},
+		ready: &ready,
+	}
+
+	if ready.Load() {
+		t.Fatal("expected ready=false initially")
+	}
+
+	if err := h.Setup(nil); err != nil {
+		t.Fatal(err)
+	}
+	if !ready.Load() {
+		t.Fatal("expected ready=true after Setup")
+	}
+
+	if err := h.Cleanup(nil); err != nil {
+		t.Fatal(err)
+	}
+	if ready.Load() {
+		t.Fatal("expected ready=false after Cleanup")
+	}
+}
