@@ -1,13 +1,15 @@
 package mock
 
-import "context"
+import (
+	"context"
 
-// Function is a mock for testing lifecycle hooks (Start/Stop).
-// It does not implement kafka.Handler to avoid import cycles.
-// Tests that need a full kafka.Handler should define one inline.
+	"knative.dev/func-go/kafka"
+)
+
 type Function struct {
-	OnStart func(context.Context, map[string]string) error
-	OnStop  func(context.Context) error
+	OnStart  func(context.Context, map[string]string) error
+	OnStop   func(context.Context) error
+	OnHandle func(context.Context, kafka.Message) error
 }
 
 func (f *Function) Start(ctx context.Context, cfg map[string]string) error {
@@ -20,6 +22,13 @@ func (f *Function) Start(ctx context.Context, cfg map[string]string) error {
 func (f *Function) Stop(ctx context.Context) error {
 	if f.OnStop != nil {
 		return f.OnStop(ctx)
+	}
+	return nil
+}
+
+func (f *Function) Handle(ctx context.Context, msg kafka.Message) error {
+	if f.OnHandle != nil {
+		return f.OnHandle(ctx, msg)
 	}
 	return nil
 }
