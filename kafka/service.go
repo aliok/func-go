@@ -96,6 +96,7 @@ func (s *Service) Start(ctx context.Context) (err error) {
 	}
 
 	if err = s.startInstance(ctx); err != nil {
+		s.listener.Close()
 		return
 	}
 
@@ -268,7 +269,11 @@ func (s *Service) consumeLoop(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("creating consumer group: %w", err)
 	}
-	defer client.Close()
+	defer func() {
+		if err := client.Close(); err != nil {
+			log.Error().Err(err).Msg("error closing kafka consumer group")
+		}
+	}()
 
 	handler := &consumerGroupHandler{
 		f:     s.f,
