@@ -576,21 +576,130 @@ func TestAlive_CustomReporterNotAlive(t *testing.T) {
 	}
 }
 
+// TestReady_CustomReporterError ensures the readiness endpoint returns 500
+// when the function's Ready method returns an error.
+func TestReady_CustomReporterError(t *testing.T) {
+	f := &readyFunction{ready: false, err: fmt.Errorf("db connection failed")}
+	service := New(f)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	go service.Serve(ln)
+	defer service.Close()
+
+	resp, err := http.Get("http://" + ln.Addr().String() + "/health/readiness")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %v", resp.StatusCode)
+	}
+}
+
+// TestAlive_CustomReporterError ensures the liveness endpoint returns 500
+// when the function's Alive method returns an error.
+func TestAlive_CustomReporterError(t *testing.T) {
+	f := &aliveFunction{alive: false, err: fmt.Errorf("health check failed")}
+	service := New(f)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	go service.Serve(ln)
+	defer service.Close()
+
+	resp, err := http.Get("http://" + ln.Addr().String() + "/health/liveness")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %v", resp.StatusCode)
+	}
+}
+
+// TestListenAddress ensures the listen address is resolved from environment
+// variables with the correct precedence.
+func TestListenAddress(t *testing.T) {
+	tests := []struct {
+		name     string
+		envs     map[string]string
+		expected string
+	}{
+		{
+			name:     "default",
+			envs:     nil,
+			expected: "[::]:8080",
+		},
+		{
+			name:     "LISTEN_ADDRESS",
+			envs:     map[string]string{"LISTEN_ADDRESS": "0.0.0.0:9090"},
+			expected: "0.0.0.0:9090",
+		},
+		{
+			name:     "deprecated ADDRESS and PORT",
+			envs:     map[string]string{"ADDRESS": "10.0.0.1", "PORT": "3000"},
+			expected: "10.0.0.1:3000",
+		},
+		{
+			name:     "deprecated ADDRESS only",
+			envs:     map[string]string{"ADDRESS": "10.0.0.1"},
+			expected: "10.0.0.1:8080",
+		},
+		{
+			name:     "deprecated PORT only",
+			envs:     map[string]string{"PORT": "3000"},
+			expected: "127.0.0.1:3000",
+		},
+		{
+			name:     "LISTEN_ADDRESS takes precedence",
+			envs:     map[string]string{"LISTEN_ADDRESS": "0.0.0.0:9090", "ADDRESS": "10.0.0.1", "PORT": "3000"},
+			expected: "0.0.0.0:9090",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("LISTEN_ADDRESS", "")
+			t.Setenv("ADDRESS", "")
+			t.Setenv("PORT", "")
+			for k, v := range tt.envs {
+				t.Setenv(k, v)
+			}
+			got := listenAddress()
+			if got != tt.expected {
+				t.Fatalf("expected %q, got %q", tt.expected, got)
+			}
+		})
+	}
+}
+
 // readyFunction implements Handler and ReadinessReporter for testing.
 type readyFunction struct {
 	ready bool
+	err   error
 }
 
 func (f *readyFunction) Handle(_ context.Context, _ Message) error { return nil }
-func (f *readyFunction) Ready(_ context.Context) (bool, error)     { return f.ready, nil }
+func (f *readyFunction) Ready(_ context.Context) (bool, error)     { return f.ready, f.err }
 
 // aliveFunction implements Handler and LivenessReporter for testing.
 type aliveFunction struct {
 	alive bool
+	err   error
 }
 
 func (f *aliveFunction) Handle(_ context.Context, _ Message) error { return nil }
-func (f *aliveFunction) Alive(_ context.Context) (bool, error)     { return f.alive, nil }
+func (f *aliveFunction) Alive(_ context.Context) (bool, error)     { return f.alive, f.err }
 
 // mockSession implements sarama.ConsumerGroupSession for testing.
 type mockSession struct {
