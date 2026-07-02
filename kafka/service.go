@@ -395,7 +395,7 @@ func listenAddress() string {
 			address = "127.0.0.1"
 		}
 		if port != "" {
-			log.Warn().Msg("Environment variable PORT is deprecated and support will be removed in future version.s  Try rebuilding your Function with the latest version of func to use LISTEN_ADDRESS instead.")
+			log.Warn().Msg("Environment variable PORT is deprecated and support will be removed in future versions.  Try rebuilding your Function with the latest version of func to use LISTEN_ADDRESS instead.")
 		} else {
 			port = "8080"
 		}
