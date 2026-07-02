@@ -321,11 +321,11 @@ func (h *consumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession,
 			Offset:    msg.Offset,
 			Timestamp: msg.Timestamp,
 		}
-		for _, h := range msg.Headers {
-			if h != nil {
+		for _, rh := range msg.Headers {
+			if rh != nil {
 				m.Headers = append(m.Headers, Header{
-					Key:   string(h.Key),
-					Value: h.Value,
+					Key:   string(rh.Key),
+					Value: rh.Value,
 				})
 			}
 		}
