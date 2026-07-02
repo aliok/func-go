@@ -353,7 +353,7 @@ func kafkaBrokers() []string {
 	if v == "" {
 		return nil
 	}
-	return strings.Split(v, ",")
+	return splitAndTrim(v)
 }
 
 func kafkaTopics() []string {
@@ -361,7 +361,19 @@ func kafkaTopics() []string {
 	if v == "" {
 		return nil
 	}
-	return strings.Split(v, ",")
+	return splitAndTrim(v)
+}
+
+func splitAndTrim(s string) []string {
+	parts := strings.Split(s, ",")
+	var result []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			result = append(result, p)
+		}
+	}
+	return result
 }
 
 func kafkaConsumerGroup() string {

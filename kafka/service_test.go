@@ -711,3 +711,31 @@ func TestConsumeClaim_SetupCleanup(t *testing.T) {
 		t.Fatal("expected ready=false after Cleanup")
 	}
 }
+
+func TestSplitAndTrim(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected []string
+	}{
+		{"simple", "a,b,c", []string{"a", "b", "c"}},
+		{"with spaces", "a, b, c", []string{"a", "b", "c"}},
+		{"trailing comma", "a,b,", []string{"a", "b"}},
+		{"empty entries", "a,,b", []string{"a", "b"}},
+		{"spaces only", " , , ", nil},
+		{"single value", "a", []string{"a"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := splitAndTrim(tt.input)
+			if len(got) != len(tt.expected) {
+				t.Fatalf("expected %v, got %v", tt.expected, got)
+			}
+			for i := range got {
+				if got[i] != tt.expected[i] {
+					t.Fatalf("expected %v, got %v", tt.expected, got)
+				}
+			}
+		})
+	}
+}
