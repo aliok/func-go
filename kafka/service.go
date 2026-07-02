@@ -239,6 +239,8 @@ func (s *Service) shutdown(sourceErr error) (err error) {
 // consumeLoop connects to Kafka and consumes messages, calling the function
 // handler for each message.
 func (s *Service) consumeLoop(ctx context.Context) error {
+	defer s.ready.Store(false)
+
 	brokers := kafkaBrokers()
 	topics := kafkaTopics()
 	group := kafkaConsumerGroup()
