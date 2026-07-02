@@ -71,10 +71,13 @@ func TestStart_Invoked(t *testing.T) {
 	select {
 	case <-timeoutCh:
 		t.Fatal("function failed to notify of start")
-	case err := <-errCh:
-		// Consumer loop will error because KAFKA_BROKERS is not set,
-		// but Start should still be invoked before that.
-		_ = err
+	case <-errCh:
+		select {
+		case <-startCh:
+			t.Log("start signal received")
+		case <-time.After(100 * time.Millisecond):
+			t.Fatal("Start hook was not invoked")
+		}
 	case <-startCh:
 		t.Log("start signal received")
 	}
@@ -107,8 +110,13 @@ func TestStart_Static(t *testing.T) {
 	select {
 	case <-timeoutCh:
 		t.Fatal("function failed to notify of start")
-	case err := <-errCh:
-		_ = err
+	case <-errCh:
+		select {
+		case <-startCh:
+			t.Log("start signal received")
+		case <-time.After(100 * time.Millisecond):
+			t.Fatal("Start hook was not invoked")
+		}
 	case <-startCh:
 		t.Log("start signal received")
 	}
@@ -150,8 +158,13 @@ func TestStart_CfgEnvs(t *testing.T) {
 	select {
 	case <-timeoutCh:
 		t.Fatal("function failed to notify of start")
-	case err := <-errCh:
-		_ = err
+	case <-errCh:
+		select {
+		case <-startCh:
+			t.Log("start signal received")
+		case <-time.After(100 * time.Millisecond):
+			t.Fatal("Start hook was not invoked")
+		}
 	case <-startCh:
 		t.Log("start signal received")
 	}
@@ -206,8 +219,13 @@ func TestCfg_Static(t *testing.T) {
 	select {
 	case <-timeoutCh:
 		t.Fatal("function failed to notify of start")
-	case err := <-errCh:
-		_ = err
+	case <-errCh:
+		select {
+		case <-startCh:
+			t.Log("start signal received")
+		case <-time.After(100 * time.Millisecond):
+			t.Fatal("Start hook was not invoked")
+		}
 	case <-startCh:
 		t.Log("start signal received")
 	}
@@ -246,9 +264,13 @@ func TestStop_Invoked(t *testing.T) {
 	select {
 	case <-timeoutCh:
 		t.Fatal("function failed to notify of start")
-	case err := <-errCh:
-		_ = err
-		return
+	case <-errCh:
+		select {
+		case <-startCh:
+			t.Log("start signal received")
+		case <-time.After(100 * time.Millisecond):
+			t.Fatal("Start hook was not invoked")
+		}
 	case <-startCh:
 		t.Log("start signal received")
 	}
@@ -258,8 +280,13 @@ func TestStop_Invoked(t *testing.T) {
 	select {
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("function failed to notify of stop")
-	case err := <-errCh:
-		_ = err
+	case <-errCh:
+		select {
+		case <-stopCh:
+			t.Log("stop signal received")
+		case <-time.After(100 * time.Millisecond):
+			t.Fatal("Stop hook was not invoked")
+		}
 	case <-stopCh:
 		t.Log("stop signal received")
 	}
