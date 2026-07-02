@@ -389,7 +389,7 @@ func splitAndTrim(s string) []string {
 }
 
 func kafkaConsumerGroup() string {
-	return os.Getenv("KAFKA_CONSUMER_GROUP")
+	return strings.TrimSpace(os.Getenv("KAFKA_CONSUMER_GROUP"))
 }
 
 func listenAddress() string {
