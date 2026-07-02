@@ -170,6 +170,12 @@ func TestCfg_Static(t *testing.T) {
 	)
 	defer cancel()
 
+	origDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chdir(origDir) })
+
 	dir := t.TempDir()
 	if err := os.Chdir(dir); err != nil {
 		t.Fatal(err)
