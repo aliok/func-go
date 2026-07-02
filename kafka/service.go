@@ -312,40 +312,47 @@ func (h *consumerGroupHandler) Cleanup(_ sarama.ConsumerGroupSession) error {
 }
 
 func (h *consumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
-	for msg := range claim.Messages() {
-		m := Message{
-			Key:       msg.Key,
-			Value:     msg.Value,
-			Topic:     msg.Topic,
-			Partition: msg.Partition,
-			Offset:    msg.Offset,
-			Timestamp: msg.Timestamp,
-		}
-		for _, rh := range msg.Headers {
-			if rh != nil {
-				m.Headers = append(m.Headers, Header{
-					Key:   string(rh.Key),
-					Value: rh.Value,
-				})
+	for {
+		select {
+		case msg, ok := <-claim.Messages():
+			if !ok {
+				return nil
 			}
-		}
+			m := Message{
+				Key:       msg.Key,
+				Value:     msg.Value,
+				Topic:     msg.Topic,
+				Partition: msg.Partition,
+				Offset:    msg.Offset,
+				Timestamp: msg.Timestamp,
+			}
+			for _, rh := range msg.Headers {
+				if rh != nil {
+					m.Headers = append(m.Headers, Header{
+						Key:   string(rh.Key),
+						Value: rh.Value,
+					})
+				}
+			}
 
-		// TODO: add retry support (backoff, max attempts, DLQ)
-		// TODO: a failed message is effectively lost if a later message in the
-		// same partition succeeds, because MarkMessage on a higher offset
-		// implicitly commits the earlier one. Consider stopping the partition
-		// on error or tracking failed offsets separately.
-		if err := h.f.Handle(session.Context(), m); err != nil {
-			log.Error().Err(err).
-				Str("topic", msg.Topic).
-				Int32("partition", msg.Partition).
-				Int64("offset", msg.Offset).
-				Msg("error handling kafka message")
-			continue
+			// TODO: add retry support (backoff, max attempts, DLQ)
+			// TODO: a failed message is effectively lost if a later message in the
+			// same partition succeeds, because MarkMessage on a higher offset
+			// implicitly commits the earlier one. Consider stopping the partition
+			// on error or tracking failed offsets separately.
+			if err := h.f.Handle(session.Context(), m); err != nil {
+				log.Error().Err(err).
+					Str("topic", msg.Topic).
+					Int32("partition", msg.Partition).
+					Int64("offset", msg.Offset).
+					Msg("error handling kafka message")
+				continue
+			}
+			session.MarkMessage(msg, "")
+		case <-session.Context().Done():
+			return nil
 		}
-		session.MarkMessage(msg, "")
 	}
-	return nil
 }
 
 func kafkaBrokers() []string {

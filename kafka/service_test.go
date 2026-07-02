@@ -745,6 +745,30 @@ func TestConsumeClaim_SetupCleanup(t *testing.T) {
 	}
 }
 
+// TestConsumeClaim_SessionCancel ensures that ConsumeClaim returns promptly
+// when the session context is canceled, even if messages are still available.
+func TestConsumeClaim_SessionCancel(t *testing.T) {
+	f := &testFunction{
+		onHandle: func(_ context.Context, _ Message) error {
+			return nil
+		},
+	}
+
+	var ready atomic.Bool
+	h := &consumerGroupHandler{f: f, ready: &ready}
+
+	ch := make(chan *sarama.ConsumerMessage, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	session := &mockSession{ctx: ctx}
+	claim := &mockClaim{ch: ch}
+
+	if err := h.ConsumeClaim(session, claim); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSplitAndTrim(t *testing.T) {
 	tests := []struct {
 		name     string
