@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -47,11 +48,14 @@ func (f *testFunction) Handle(ctx context.Context, msg Message) error {
 // if it is implemented by the function instance.
 func TestStart_Invoked(t *testing.T) {
 	t.Setenv("LISTEN_ADDRESS", "127.0.0.1:")
+	t.Setenv("KAFKA_BROKERS", "")
+	t.Setenv("KAFKA_TOPICS", "")
+	t.Setenv("KAFKA_CONSUMER_GROUP", "")
 
 	var (
 		ctx, cancel = context.WithCancel(context.Background())
 		startCh     = make(chan any)
-		errCh       = make(chan error)
+		errCh       = make(chan error, 1)
 		timeoutCh   = time.After(500 * time.Millisecond)
 		onStart     = func(_ context.Context, _ map[string]string) error {
 			startCh <- true
@@ -88,10 +92,13 @@ func TestStart_Invoked(t *testing.T) {
 // for New(f).Start().
 func TestStart_Static(t *testing.T) {
 	t.Setenv("LISTEN_ADDRESS", "127.0.0.1:")
+	t.Setenv("KAFKA_BROKERS", "")
+	t.Setenv("KAFKA_TOPICS", "")
+	t.Setenv("KAFKA_CONSUMER_GROUP", "")
 
 	var (
 		startCh   = make(chan any)
-		errCh     = make(chan error)
+		errCh     = make(chan error, 1)
 		timeoutCh = time.After(500 * time.Millisecond)
 		onStart   = func(_ context.Context, _ map[string]string) error {
 			startCh <- true
@@ -126,11 +133,14 @@ func TestStart_Static(t *testing.T) {
 // containing all available environment variables as a parameter.
 func TestStart_CfgEnvs(t *testing.T) {
 	t.Setenv("LISTEN_ADDRESS", "127.0.0.1:")
+	t.Setenv("KAFKA_BROKERS", "")
+	t.Setenv("KAFKA_TOPICS", "")
+	t.Setenv("KAFKA_CONSUMER_GROUP", "")
 
 	var (
 		ctx, cancel = context.WithCancel(context.Background())
 		startCh     = make(chan any)
-		errCh       = make(chan error)
+		errCh       = make(chan error, 1)
 		timeoutCh   = time.After(500 * time.Millisecond)
 		onStart     = func(_ context.Context, cfg map[string]string) error {
 			v := cfg["TEST_ENV"]
@@ -174,11 +184,14 @@ func TestStart_CfgEnvs(t *testing.T) {
 // built into the container as cfg are correctly read.
 func TestCfg_Static(t *testing.T) {
 	t.Setenv("LISTEN_ADDRESS", "127.0.0.1:")
+	t.Setenv("KAFKA_BROKERS", "")
+	t.Setenv("KAFKA_TOPICS", "")
+	t.Setenv("KAFKA_CONSUMER_GROUP", "")
 
 	var (
 		ctx, cancel = context.WithCancel(context.Background())
 		startCh     = make(chan any)
-		errCh       = make(chan error)
+		errCh       = make(chan error, 1)
 		timeoutCh   = time.After(500 * time.Millisecond)
 	)
 	defer cancel()
@@ -235,12 +248,15 @@ func TestCfg_Static(t *testing.T) {
 // cancellation if it is implemented by the function instance.
 func TestStop_Invoked(t *testing.T) {
 	t.Setenv("LISTEN_ADDRESS", "127.0.0.1:")
+	t.Setenv("KAFKA_BROKERS", "")
+	t.Setenv("KAFKA_TOPICS", "")
+	t.Setenv("KAFKA_CONSUMER_GROUP", "")
 
 	var (
 		ctx, cancel = context.WithCancel(context.Background())
 		startCh     = make(chan any)
 		stopCh      = make(chan any)
-		errCh       = make(chan error)
+		errCh       = make(chan error, 1)
 		timeoutCh   = time.After(500 * time.Millisecond)
 		onStart     = func(_ context.Context, _ map[string]string) error {
 			startCh <- true
@@ -875,6 +891,38 @@ func TestConsumeClaim_SessionCancel(t *testing.T) {
 
 	if err := h.ConsumeClaim(session, claim); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestConsumeLoop_MissingConfig ensures consumeLoop returns an error when
+// required Kafka environment variables are not set.
+func TestConsumeLoop_MissingConfig(t *testing.T) {
+	tests := []struct {
+		name    string
+		brokers string
+		topics  string
+		group   string
+		errMsg  string
+	}{
+		{"no brokers", "", "t1", "g1", "KAFKA_BROKERS"},
+		{"no topics", "b1:9092", "", "g1", "KAFKA_TOPICS"},
+		{"no group", "b1:9092", "t1", "", "KAFKA_CONSUMER_GROUP"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("KAFKA_BROKERS", tt.brokers)
+			t.Setenv("KAFKA_TOPICS", tt.topics)
+			t.Setenv("KAFKA_CONSUMER_GROUP", tt.group)
+
+			s := New(&testFunction{})
+			err := s.consumeLoop(context.Background())
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.errMsg) {
+				t.Fatalf("expected error containing %q, got %q", tt.errMsg, err.Error())
+			}
+		})
 	}
 }
 
