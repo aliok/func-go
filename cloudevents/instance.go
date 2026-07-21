@@ -162,7 +162,8 @@ type handlerCtxEvtEvtErr interface {
 	Handle(context.Context, event.Event) (*event.Event, error)
 }
 
-func getReceiverFn(f any) any {
+// GetReceiverFn extracts the bound Handle method from a CloudEvents handler as a raw function value.
+func GetReceiverFn(f any) any {
 	switch h := f.(type) {
 	case handler:
 		return h.Handle
