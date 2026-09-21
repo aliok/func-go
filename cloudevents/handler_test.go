@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -12,7 +13,96 @@ import (
 	"time"
 
 	"github.com/cloudevents/sdk-go/v2/event"
+	cehttp "github.com/cloudevents/sdk-go/v2/protocol/http"
 )
+
+// ceRequest builds a minimal valid binary-mode CloudEvent POST request.
+func ceRequest(t *testing.T, method, url string) *http.Request {
+	t.Helper()
+	req, err := http.NewRequest(method, url, bytes.NewReader([]byte("{}")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Ce-Specversion", "1.0")
+	req.Header.Set("Ce-Id", "id")
+	req.Header.Set("Ce-Source", "example/uri")
+	req.Header.Set("Ce-Type", "example.type")
+	req.Header.Set("Content-Type", "application/json")
+	return req
+}
+
+// TestHandler_MethodNotAllowed verifies the handler rejects the GET-style
+// methods with 405 before decoding, matching the SDK receiver instead of
+// invoking a no-argument function for them.
+func TestHandler_MethodNotAllowed(t *testing.T) {
+	var invoked int64
+	h := newCloudeventHandler(DefaultHandler{Handler: func() {
+		atomic.AddInt64(&invoked, 1)
+	}})
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	for _, method := range []string{http.MethodGet, http.MethodOptions, http.MethodDelete} {
+		req := ceRequest(t, method, srv.URL)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("%s: request failed: %v", method, err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusMethodNotAllowed {
+			t.Fatalf("%s: status = %d, want 405", method, resp.StatusCode)
+		}
+	}
+	if n := atomic.LoadInt64(&invoked); n != 0 {
+		t.Fatalf("function was invoked %d times for GET-style methods, want 0", n)
+	}
+}
+
+// TestHandler_PanicRecovered verifies a panic in the user function becomes a
+// 500 response rather than escaping to net/http and dropping the connection.
+func TestHandler_PanicRecovered(t *testing.T) {
+	h := newCloudeventHandler(DefaultHandler{Handler: func(_ context.Context, _ event.Event) error {
+		panic("boom")
+	}})
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	resp, err := http.DefaultClient.Do(ceRequest(t, http.MethodPost, srv.URL))
+	if err != nil {
+		t.Fatalf("request failed (panic escaped to net/http?): %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", resp.StatusCode)
+	}
+}
+
+// TestHandler_ErrorResultBody verifies that when the function returns an HTTP
+// result carrying a message and no response event, the handler writes both the
+// result's status code and its message body, preserving the SDK behavior.
+func TestHandler_ErrorResultBody(t *testing.T) {
+	h := newCloudeventHandler(DefaultHandler{Handler: func(_ context.Context, _ event.Event) error {
+		return cehttp.NewResult(http.StatusTeapot, "%s", "brewing failed")
+	}})
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	resp, err := http.DefaultClient.Do(ceRequest(t, http.MethodPost, srv.URL))
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusTeapot {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusTeapot)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(body, []byte("brewing failed")) {
+		t.Fatalf("body = %q, want it to contain the result message", body)
+	}
+}
 
 // TestHandler_ConcurrentCancellation is a regression test for the CloudEvents
 // receiver wedge: the SDK's NewHTTPReceiveHandler routes every request through a

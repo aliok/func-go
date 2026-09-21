@@ -37,6 +37,17 @@ type ceHandler struct {
 func (h *ceHandler) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	ctx := req.Context()
 
+	// Match the SDK receiver: it rejects the GET-style methods with 405 before
+	// attempting to decode a CloudEvent (its OPTIONS/GET/DELETE handler hooks are
+	// unset on this handler). Without this filter these methods would fall
+	// through and invoke a no-argument function, silently changing the HTTP
+	// contract the SDK receiver enforced.
+	switch req.Method {
+	case http.MethodOptions, http.MethodGet, http.MethodDelete:
+		rw.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
 	msg := cehttp.NewMessageFromHttpRequest(req)
 	if msg == nil {
 		http.Error(rw, "could not read message from request", http.StatusBadRequest)
@@ -58,17 +69,34 @@ func (h *ceHandler) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		}
 	}
 
-	resp, result := h.fn.invoke(ctx, e)
+	// Invoke the user function under panic recovery, mirroring the SDK's receive
+	// invoker: a panic becomes a non-ACK error result (mapped to 500 below) and
+	// is logged, rather than escaping to net/http — which would drop the
+	// connection without a response and lose the logged error.
+	var resp *event.Event
+	var result protocol.Result
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				result = fmt.Errorf("call to receiver function has panicked: %v", r)
+				log.Error().Interface("panic", r).Msg("cloudevent receiver function panicked")
+			}
+		}()
+		resp, result = h.fn.invoke(ctx, e)
+	}()
 
 	// Map the function's protocol.Result to an HTTP status. A nil result and an
-	// ACK both mean success (200). An explicit HTTP result carries its own code.
+	// ACK both mean success (200). An explicit HTTP result carries its own code
+	// and message; any other non-ACK error is a 500.
 	status := http.StatusOK
+	var errMsg string
 	if result != nil {
 		var httpResult *cehttp.Result
 		if cloudevents.ResultAs(result, &httpResult) {
 			if httpResult.StatusCode > 100 && httpResult.StatusCode < 600 {
 				status = httpResult.StatusCode
 			}
+			errMsg = fmt.Errorf(httpResult.Format, httpResult.Args...).Error()
 		} else if !protocol.IsACK(result) {
 			status = http.StatusInternalServerError
 		}
@@ -81,6 +109,13 @@ func (h *ceHandler) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 	rw.WriteHeader(status)
+	// Preserve the SDK behavior of writing an explicit HTTP result's message as
+	// the response body so clients still see the handler's error text.
+	if errMsg != "" {
+		if _, werr := rw.Write([]byte(errMsg)); werr != nil {
+			log.Error().Err(werr).Msg("failed to write cloudevent error response body")
+		}
+	}
 }
 
 // receiverFn validates and invokes a user function of one of the CloudEvents
