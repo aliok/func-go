@@ -196,7 +196,14 @@ func TestHandler_ConcurrentCancellation(t *testing.T) {
 	const (
 		workers  = 8
 		duration = 2 * time.Second
-		slack    = 1 * time.Second
+		// slack is the per-request deadline AND the wedge signal: a genuine wedge
+		// blocks forever (a non-cancellable channel send that never drains), so
+		// any finite deadline catches it. It is set generously so ordinary
+		// scheduling jitter on a loaded CI runner (2 cores, -race) never makes a
+		// healthy instant-handler request hit it — a false positive that a
+		// tighter deadline produced. On the fixed path healthy requests finish in
+		// milliseconds regardless, so a large deadline costs nothing here.
+		slack = 15 * time.Second
 	)
 
 	// A single client with keep-alives and a bounded pool, so hammering
