@@ -187,6 +187,10 @@ func TestHandler_ConcurrentCancellation(t *testing.T) {
 		return nil, nil
 	}})
 	srv := httptest.NewServer(h)
+	// On the buggy (shared-channel) path the wedge leaves goroutines stuck on a
+	// non-cancellable channel send, so this deferred Close blocks and the failure
+	// surfaces as a `go test` timeout rather than the assertion message below. On
+	// the fixed path Close returns promptly. Either way the test fails on the bug.
 	defer srv.Close()
 
 	const (

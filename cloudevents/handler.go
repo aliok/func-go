@@ -123,6 +123,11 @@ func (h *ceHandler) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		}
 	}
 
+	// resp is non-nil only when the user function ran and returned an event; the
+	// decode/validation NACK paths above leave it nil. So a response event and a
+	// validation-error body are mutually exclusive here, and this ordering
+	// matches the SDK's ResponseFn (which writes the validation-error text and
+	// returns before its respMsg check).
 	if resp != nil {
 		if werr := cehttp.WriteResponseWriter(ctx, (*binding.EventMessage)(resp), status, rw); werr != nil {
 			log.Error().Err(werr).Msg("failed to write cloudevent response")
