@@ -2,6 +2,7 @@ package cloudevents
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"reflect"
@@ -55,50 +56,70 @@ func (h *ceHandler) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	}
 	defer func() { _ = msg.Finish(nil) }()
 
-	e, err := binding.ToEvent(ctx, msg)
-	// Only treat a decode failure as an error when the function actually wants
-	// the event; functions that take no event argument are invoked regardless.
-	if err != nil && h.fn.hasEventIn {
-		http.Error(rw, fmt.Sprintf("failed to convert request to event: %v", err), http.StatusBadRequest)
-		return
-	}
-	if e != nil {
-		if verr := e.Validate(); verr != nil {
-			http.Error(rw, fmt.Sprintf("invalid event: %v", verr), http.StatusBadRequest)
-			return
-		}
+	e, decodeErr := binding.ToEvent(ctx, msg)
+	var validateErr error
+	if decodeErr == nil && e != nil {
+		validateErr = e.Validate()
 	}
 
-	// Invoke the user function under panic recovery, mirroring the SDK's receive
-	// invoker: a panic becomes a non-ACK error result (mapped to 500 below) and
-	// is logged, rather than escaping to net/http — which would drop the
-	// connection without a response and lose the logged error.
+	// Derive the outcome exactly as the SDK's receive invoker does, so the HTTP
+	// status contract stays identical to NewHTTPReceiveHandler. This matters
+	// because #189 tracks reverting to the SDK receiver: the revert must not flip
+	// any status codes. A malformed event the function needs, or an invalid
+	// event, becomes a NACK receipt whose status is derived below (mirroring
+	// respFn(ctx, nil, NewReceipt(false, ...))); otherwise the user function runs
+	// under panic recovery. A decode failure for a function that takes no event
+	// argument is ignored — that function is invoked regardless.
 	var resp *event.Event
 	var result protocol.Result
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				result = fmt.Errorf("call to receiver function has panicked: %v", r)
-				log.Error().Interface("panic", r).Msg("cloudevent receiver function panicked")
-			}
+	switch {
+	case decodeErr != nil && h.fn.hasEventIn:
+		result = protocol.NewReceipt(false, "failed to convert request to event: %w", decodeErr)
+	case validateErr != nil:
+		result = protocol.NewReceipt(false, "validation error in incoming event: %w", validateErr)
+	default:
+		// A panic becomes a non-ACK error result (mapped to 500 below) and is
+		// logged, rather than escaping to net/http — which would drop the
+		// connection without a response and lose the logged error.
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					result = fmt.Errorf("call to receiver function has panicked: %v", r)
+					log.Error().Interface("panic", r).Msg("cloudevent receiver function panicked")
+				}
+			}()
+			resp, result = h.fn.invoke(ctx, e)
 		}()
-		resp, result = h.fn.invoke(ctx, e)
-	}()
+	}
 
-	// Map the function's protocol.Result to an HTTP status. A nil result and an
-	// ACK both mean success (200). An explicit HTTP result carries its own code
-	// and message; any other non-ACK error is a 500.
+	// Map the outcome to an HTTP status and body, mirroring the SDK's ResponseFn
+	// exactly: a nil result and an ACK both mean success (200); an explicit HTTP
+	// result carries its own code and message body; a validation error is 400
+	// with the message as a text/plain body; an unknown encoding is 415; any
+	// other non-ACK error is 500 with no body.
 	status := http.StatusOK
 	var errMsg string
+	textPlain := false
 	if result != nil {
 		var httpResult *cehttp.Result
-		if cloudevents.ResultAs(result, &httpResult) {
+		switch {
+		case cloudevents.ResultAs(result, &httpResult):
 			if httpResult.StatusCode > 100 && httpResult.StatusCode < 600 {
 				status = httpResult.StatusCode
 			}
 			errMsg = fmt.Errorf(httpResult.Format, httpResult.Args...).Error()
-		} else if !protocol.IsACK(result) {
-			status = http.StatusInternalServerError
+		case !protocol.IsACK(result):
+			validationErr := event.ValidationError{}
+			switch {
+			case errors.As(result, &validationErr):
+				status = http.StatusBadRequest
+				errMsg = validationErr.Error()
+				textPlain = true
+			case errors.Is(result, binding.ErrUnknownEncoding):
+				status = http.StatusUnsupportedMediaType
+			default:
+				status = http.StatusInternalServerError
+			}
 		}
 	}
 
@@ -108,9 +129,12 @@ func (h *ceHandler) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		}
 		return
 	}
+	if textPlain {
+		rw.Header().Set("content-type", "text/plain")
+	}
 	rw.WriteHeader(status)
-	// Preserve the SDK behavior of writing an explicit HTTP result's message as
-	// the response body so clients still see the handler's error text.
+	// Preserve the SDK behavior of writing the result's message as the response
+	// body (HTTP results and validation errors) so clients still see the text.
 	if errMsg != "" {
 		if _, werr := rw.Write([]byte(errMsg)); werr != nil {
 			log.Error().Err(werr).Msg("failed to write cloudevent error response body")

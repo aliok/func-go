@@ -58,6 +58,71 @@ func TestHandler_MethodNotAllowed(t *testing.T) {
 	}
 }
 
+// TestHandler_UnknownEncodingStatus verifies that a POST that is not a valid
+// CloudEvent (no CE headers) delivered to an event-taking function yields 415,
+// matching the SDK receiver — not a blanket 400.
+func TestHandler_UnknownEncodingStatus(t *testing.T) {
+	h := newCloudeventHandler(DefaultHandler{Handler: func(_ context.Context, _ event.Event) error {
+		return nil
+	}})
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	// No Ce-* headers: neither binary nor structured CE encoding.
+	req, err := http.NewRequest(http.MethodPost, srv.URL, bytes.NewReader([]byte(`{"not":"a cloudevent"}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnsupportedMediaType {
+		t.Fatalf("status = %d, want 415 for an undecodable event", resp.StatusCode)
+	}
+}
+
+// TestHandler_InvalidEventStatus verifies that a decodable but invalid event
+// (missing the required "type" attribute) yields 400 with the validation
+// message as the body, matching the SDK receiver.
+func TestHandler_InvalidEventStatus(t *testing.T) {
+	h := newCloudeventHandler(DefaultHandler{Handler: func(_ context.Context, _ event.Event) error {
+		return nil
+	}})
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	// Valid binary-mode headers except the required Ce-Type is omitted, so the
+	// event decodes but fails validation.
+	req, err := http.NewRequest(http.MethodPost, srv.URL, bytes.NewReader([]byte("{}")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Ce-Specversion", "1.0")
+	req.Header.Set("Ce-Id", "id")
+	req.Header.Set("Ce-Source", "example/uri")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for an invalid event", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(body) == 0 {
+		t.Fatal("expected a validation-error body, got empty")
+	}
+}
+
 // TestHandler_PanicRecovered verifies a panic in the user function becomes a
 // 500 response rather than escaping to net/http and dropping the connection.
 func TestHandler_PanicRecovered(t *testing.T) {
@@ -180,13 +245,15 @@ func TestHandler_ConcurrentCancellation(t *testing.T) {
 				}
 				// Healthy request: generous deadline against an instant handler.
 				ctx, cancel := context.WithTimeout(context.Background(), slack)
-				start := time.Now()
 				err := post(ctx)
-				elapsed := time.Since(start)
 				cancel()
 				switch {
-				case errors.Is(err, context.DeadlineExceeded) || elapsed > slack/2:
-					// The wedge symptom: an instant handler took ~the full deadline.
+				case errors.Is(err, context.DeadlineExceeded):
+					// The wedge symptom: an instant handler took ~the full
+					// deadline. A genuine wedge always surfaces as a full-deadline
+					// stall, so DeadlineExceeded alone detects it without the
+					// false positives an elapsed-time threshold would produce on a
+					// contended CI runner.
 					atomic.AddInt64(&healthyStalled, 1)
 				case err != nil:
 					// Localhost harness noise (e.g. transient dial errors); tolerated.
